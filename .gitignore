@@ -22,3 +22,10 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+runner/runner.exe
+runner/runner
+scheduler/scheduler.exe
+scheduler/scheduler
+web/web.exe
+web/web
