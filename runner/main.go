@@ -52,7 +52,10 @@ var (
 )
 
 var (
-	tasks map[string]Task
+	tasks = map[string]Task{
+		"clear_expired_tokens": &ClearExpiredTokens{},
+	}
+	session *gorethink.Session
 )
 
 func main() {
@@ -71,7 +74,8 @@ func main() {
 	log.Level = logrus.DebugLevel
 
 	// Initialize a database connection
-	session, err := gorethink.Connect(gorethink.ConnectOpts{
+	var err error
+	session, err = gorethink.Connect(gorethink.ConnectOpts{
 		Address: *rethinkdbAddress,
 		AuthKey: *rethinkdbKey,
 		MaxIdle: 10,
