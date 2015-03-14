@@ -7,7 +7,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/bitly/go-nsq"
-	"github.com/dancannon/gorethink"
+	r "github.com/dancannon/gorethink"
 	"github.com/lavab/flag"
 	"github.com/lavab/worker/shared"
 	"gopkg.in/robfig/cron.v2"
@@ -62,7 +62,7 @@ type Job struct {
 	shared.Job
 }
 
-func (j *shared.Job) Run() {
+func (j *Job) Run() {
 	body, err := json.Marshal(j)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -94,7 +94,7 @@ func main() {
 	log.Level = logrus.DebugLevel
 
 	// Initialize a database connection
-	session, err := gorethink.Connect(gorethink.ConnectOpts{
+	session, err := r.Connect(r.ConnectOpts{
 		Address: *rethinkdbAddress,
 		AuthKey: *rethinkdbKey,
 		MaxIdle: 10,
@@ -106,6 +106,10 @@ func main() {
 		}).Fatal("Unable to connect to RethinkDB")
 	}
 
+	// Prepare database's structure
+	r.DbCreate(*rethinkdbDatabase).Exec(session)
+	r.Db(*rethinkdbDatabase).TableCreate("jobs").Exec(session)
+
 	// Connect to nsq
 	producer, err = nsq.NewProducer(*nsqdAddress, nsq.NewConfig())
 	if err != nil {
@@ -115,13 +119,13 @@ func main() {
 	}
 
 	// Fetch the jobs
-	cursor, err := gorethink.Db(*rethinkdbDatabase).Table("jobs").Run(session)
+	cursor, err := r.Db(*rethinkdbDatabase).Table("jobs").Run(session)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err.Error(),
 		}).Fatal("Unable to fetch jobs from RethinkDB")
 	}
-	var jobs []*shared.Job
+	var jobs []*Job
 	if err := cursor.All(&jobs); err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err.Error(),
@@ -148,11 +152,11 @@ func main() {
 	log.Print("Starting the change watcher")
 
 	// Watch for changes
-	cursor, err = gorethink.Db(*rethinkdbDatabase).Table("jobs").Changes().Run(session)
+	cursor, err = r.Db(*rethinkdbDatabase).Table("jobs").Changes().Run(session)
 
 	var change struct {
-		NewValue *shared.Job `gorethink:"new_val"`
-		OldValue *shared.Job `gorethink:"old_val"`
+		NewValue *Job `gorethink:"new_val"`
+		OldValue *Job `gorethink:"old_val"`
 	}
 	for cursor.Next(&change) {
 		if change.NewValue == nil {
