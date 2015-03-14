@@ -8,7 +8,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/bitly/go-nsq"
-	"github.com/dancannon/gorethink"
+	r "github.com/dancannon/gorethink"
 	"github.com/lavab/flag"
 	"github.com/lavab/worker/shared"
 )
@@ -55,7 +55,7 @@ var (
 	tasks = map[string]Task{
 		"clear_expired_tokens": &ClearExpiredTokens{},
 	}
-	session *gorethink.Session
+	session *r.Session
 )
 
 func main() {
@@ -75,7 +75,7 @@ func main() {
 
 	// Initialize a database connection
 	var err error
-	session, err = gorethink.Connect(gorethink.ConnectOpts{
+	session, err = r.Connect(r.ConnectOpts{
 		Address: *rethinkdbAddress,
 		AuthKey: *rethinkdbKey,
 		MaxIdle: 10,
@@ -87,8 +87,12 @@ func main() {
 		}).Fatal("Unable to connect to RethinkDB")
 	}
 
+	// Create the database and a scripts table
+	r.DbCreate(*rethinkdbDatabase).Exec(session)
+	r.Db(*rethinkdbDatabase).TableCreate("scripts").Exec(session)
+
 	// Fetch the scripts
-	cursor, err := gorethink.Db(*rethinkdbDatabase).Table("scripts").Run(session)
+	cursor, err := r.Db(*rethinkdbDatabase).Table("scripts").Run(session)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err.Error(),
@@ -162,7 +166,7 @@ func main() {
 	log.Print("Starting the watcher.")
 
 	// Watch for changes
-	cursor, err = gorethink.Db(*rethinkdbDatabase).Table("scripts").Changes().Run(session)
+	cursor, err = r.Db(*rethinkdbDatabase).Table("scripts").Changes().Run(session)
 	var change struct {
 		NewValue *shared.Script `gorethink:"new_val"`
 		OldValue *shared.Script `gorethink:"old_val"`
