@@ -21,7 +21,7 @@ var (
 	kiriAddresses          = flag.String("kiri_addresses", "", "Addresses of the etcd servers to use")
 	kiriDiscoveryStores    = flag.String("kiri_discovery_stores", "", "Stores list for service discovery. Syntax: kind,path;kind,path")
 	kiriDiscoveryRethinkDB = flag.String("kiri_discovery_rethinkdb", "rethinkdb", "Name of the RethinkDB service in SD")
-	kiriDiscoveryNSQd      = flag.String("kiri_discovery_nsqd", "nsqd-http", "Name of the nsqd HTTP server in SD")
+	kiriDiscoveryNSQd      = flag.String("kiri_discovery_nsqd", "nsqd-tcp", "Name of the nsqd TCP server in SD")
 )
 
 var (
