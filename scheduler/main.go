@@ -2,53 +2,26 @@ package main
 
 import (
 	"encoding/json"
-	"os"
-	"time"
+	"strings"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/bitly/go-nsq"
 	r "github.com/dancannon/gorethink"
-	"github.com/lavab/flag"
+	"github.com/lavab/kiri"
 	"github.com/lavab/worker/shared"
+	"github.com/namsral/flag"
 	"gopkg.in/robfig/cron.v2"
 )
 
 var (
-	// Enable config functionality
-	configFlag = flag.String("config", "", "Config file to read")
-	// General flags
-	logFormatterType = flag.String("log", "text", "Log formatter type")
-	forceColors      = flag.Bool("force_colors", false, "Force colored prompt?")
-	// etcd
-	etcdAddress  = flag.String("etcd_address", "", "etcd peer addresses split by commas")
-	etcdCAFile   = flag.String("etcd_ca_file", "", "etcd path to server cert's ca")
-	etcdCertFile = flag.String("etcd_cert_file", "", "etcd path to client cert file")
-	etcdKeyFile  = flag.String("etcd_key_file", "", "etcd path to client key file")
-	etcdPath     = flag.String("etcd_path", "worker/manager/", "Path of the keys")
-	// Database-related flags
-	rethinkdbAddress = flag.String("rethinkdb_address", func() string {
-		address := os.Getenv("RETHINKDB_PORT_28015_TCP_ADDR")
-		if address == "" {
-			address = "127.0.0.1"
-		}
-		return address + ":28015"
-	}(), "Address of the RethinkDB database")
-	rethinkdbKey      = flag.String("rethinkdb_key", os.Getenv("RETHINKDB_AUTHKEY"), "Authentication key of the RethinkDB database")
-	rethinkdbDatabase = flag.String("rethinkdb_db", func() string {
-		database := os.Getenv("RETHINKDB_DB")
-		if database == "" {
-			database = "worker_dev"
-		}
-		return database
-	}(), "Database name on the RethinkDB server")
-	// nsq address
-	nsqdAddress = flag.String("nsqd_address", func() string {
-		address := os.Getenv("NSQD_PORT_4150_TCP_ADDR")
-		if address == "" {
-			address = "127.0.0.1"
-		}
-		return address + ":4150"
-	}(), "Address of the nsqd server")
+	logFormatterType  = flag.String("log", "text", "Log formatter type")
+	forceColors       = flag.Bool("force_colors", false, "Force colored prompt?")
+	rethinkdbDatabase = flag.String("rethinkdb_db", "worker_dev", "Database name on the RethinkDB server")
+
+	kiriAddresses          = flag.String("kiri_addresses", "", "Addresses of the etcd servers to use")
+	kiriDiscoveryStores    = flag.String("kiri_discovery_stores", "", "Stores list for service discovery. Syntax: kind,path;kind,path")
+	kiriDiscoveryRethinkDB = flag.String("kiri_discovery_rethinkdb", "rethinkdb", "Name of the RethinkDB service in SD")
+	kiriDiscoveryNSQd      = flag.String("kiri_discovery_nsqd", "nsqd-http", "Name of the nsqd HTTP server in SD")
 )
 
 var (
@@ -93,13 +66,44 @@ func main() {
 	}
 	log.Level = logrus.DebugLevel
 
-	// Initialize a database connection
-	session, err := r.Connect(r.ConnectOpts{
-		Address: *rethinkdbAddress,
-		AuthKey: *rethinkdbKey,
-		MaxIdle: 10,
-		Timeout: time.Second * 10,
-	})
+	// Parse kiri addresses
+	ka := strings.Split(*kiriAddresses, ",")
+
+	// Set up kiri agent for discovery
+	kd := kiri.New(ka)
+
+	// Add stores to kd
+	for i, store := range strings.Split(*kiriDiscoveryStores, ";") {
+		parts := strings.Split(store, ",")
+		if len(parts) != 2 {
+			log.Fatalf("Invalid parts count in kiri_discovery_stores#%d", i)
+		}
+
+		var kind kiri.Format
+		switch parts[0] {
+		case "default":
+			kind = kiri.Default
+		case "puro":
+			kind = kiri.Puro
+		default:
+			log.Fatalf("Invalid kind of store in kiri_discovery_stores#%d", i)
+		}
+		kd.Store(kind, parts[1])
+	}
+
+	// Connect to RethinkDB
+	var session *r.Session
+	err := kd.Discover(*kiriDiscoveryRethinkDB, nil, kiri.DiscoverFunc(func(service *kiri.Service) error {
+		var err error
+		session, err = r.Connect(r.ConnectOpts{
+			Address: service.Address,
+		})
+		if err != nil {
+			log.Print(err)
+		}
+
+		return err
+	}))
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err.Error(),
@@ -111,7 +115,22 @@ func main() {
 	r.Db(*rethinkdbDatabase).TableCreate("jobs").Exec(session)
 
 	// Connect to nsq
-	producer, err = nsq.NewProducer(*nsqdAddress, nsq.NewConfig())
+	var producer *nsq.Producer
+	err = kd.Discover(*kiriDiscoveryNSQd, nil, kiri.DiscoverFunc(func(service *kiri.Service) error {
+		producer, err = nsq.NewProducer(service.Address, nsq.NewConfig())
+		if err != nil {
+			log.Error(err)
+			return err
+		}
+
+		err = producer.Ping()
+		if err != nil {
+			log.Error(err)
+			return err
+		}
+
+		return nil
+	}))
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err.Error(),
